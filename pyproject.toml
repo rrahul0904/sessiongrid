@@ -1,0 +1,9 @@
+[project]
+name = "sessiongrid"
+version = "0.1.0"
+description = "Policy-aware multi-session social operations control plane"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
