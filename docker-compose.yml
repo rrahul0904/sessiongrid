@@ -1,0 +1,17 @@
+services:
+  sessiongrid:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - sessiongrid_data:/app/runtime_data
+      - sessiongrid_db:/app/data
+    environment:
+      SESSIONGRID_DATABASE_URL: sqlite:////app/data/sessiongrid.db
+      SESSIONGRID_RUNTIME_DIR: /app/runtime_data
+
+volumes:
+  sessiongrid_data:
+  sessiongrid_db:
