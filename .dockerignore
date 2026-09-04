@@ -1,0 +1,10 @@
+.git
+.github
+.venv
+__pycache__
+.pytest_cache
+*.db
+runtime_data
+test_runtime_data
+.env
+.DS_Store
