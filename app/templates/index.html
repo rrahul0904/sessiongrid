@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>{{ app_name }}</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <aside>
+      <div class="brand">SG <span>SessionGrid</span></div>
+      <nav>
+        <button class="nav active" data-view="dashboard">Dashboard</button>
+        <button class="nav" data-view="screens">Screens</button>
+        <button class="nav" data-view="profiles">Profiles</button>
+        <button class="nav" data-view="automation">Automation</button>
+        <button class="nav" data-view="audit">Audit</button>
+      </nav>
+      <div class="scope">Authorized operations only<br/>Isolation • audit • approvals</div>
+    </aside>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">SOCIAL OPERATIONS CONTROL PLANE</p>
+          <h1 id="page-title">Operations overview</h1>
+        </div>
+        <div class="header-actions">
+          <span class="health"><i></i><span id="health-label">Connecting…</span></span>
+          <button id="new-profile" class="primary">+ New profile</button>
+        </div>
+      </header>
+
+      <section id="dashboard" class="view active">
+        <div id="metrics" class="metrics"></div>
+        <div class="section-head">
+          <div><h2>Live workspaces</h2><p>Start, inspect and control authorized persistent sessions.</p></div>
+          <button class="secondary" id="refresh">Refresh</button>
+        </div>
+        <div id="session-grid" class="session-grid"></div>
+      </section>
+
+      <section id="screens" class="view">
+        <div class="section-head">
+          <div><h2>Screen wall</h2><p>Evidence-first view of every active runtime.</p></div>
+        </div>
+        <div id="screen-wall" class="session-grid"></div>
+      </section>
+
+      <section id="profiles" class="view">
+        <div class="section-head"><div><h2>Profiles</h2><p>Persistent, isolated workspaces with explicit ownership.</p></div></div>
+        <div class="panel"><div id="profile-table"></div></div>
+      </section>
+
+      <section id="automation" class="view">
+        <div class="empty">
+          <strong>Automation foundation</strong>
+          <h2>Human-approved workflows come next</h2>
+          <p>Planned flow: Trigger → Open profile → Inspect → AI draft → Human approval → Execute → Capture evidence → Audit.</p>
+          <div class="flow"><span>Trigger</span><b>→</b><span>Runtime</span><b>→</b><span>Agent</span><b>→</b><span>Approval</span><b>→</b><span>Audit</span></div>
+        </div>
+      </section>
+
+      <section id="audit" class="view">
+        <div class="section-head"><div><h2>Audit trail</h2><p>Operator and runtime actions preserved for review.</p></div></div>
+        <div class="panel"><div id="audit-list"></div></div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="profile-dialog">
+    <form id="profile-form">
+      <div class="dialog-head"><div><p class="eyebrow">NEW WORKSPACE</p><h2>Create profile</h2></div><button type="button" id="close-dialog">×</button></div>
+      <div class="form-grid">
+        <label>Name<input name="name" required placeholder="Client US"></label>
+        <label>Platform<input name="platform" value="Web"></label>
+        <label>Owner<input name="owner" value="Social Team"></label>
+        <label>Locale<input name="locale" value="en-US"></label>
+        <label>Timezone<input name="timezone" value="America/New_York"></label>
+        <label>Network label<input name="network_label" value="Default egress"></label>
+      </div>
+      <label>Start URL<input name="start_url" value="https://example.com"></label>
+      <p class="notice">SessionGrid is for authorized account operations, QA, support, localization and other legitimate workflows. It does not provide detection-evasion features.</p>
+      <div class="dialog-actions"><button type="button" class="secondary" id="cancel-dialog">Cancel</button><button class="primary">Create profile</button></div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
