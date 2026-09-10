@@ -1,17 +1,38 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: sessiongrid
+      POSTGRES_USER: sessiongrid
+      POSTGRES_PASSWORD: sessiongrid
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sessiongrid -d sessiongrid"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - sessiongrid_postgres:/var/lib/postgresql/data
+
   sessiongrid:
     build: .
     ports:
       - "8000:8000"
     env_file:
       - .env
-    volumes:
-      - sessiongrid_data:/app/runtime_data
-      - sessiongrid_db:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
-      SESSIONGRID_DATABASE_URL: sqlite:////app/data/sessiongrid.db
+      SESSIONGRID_DATABASE_URL: postgresql+psycopg://sessiongrid:sessiongrid@postgres:5432/sessiongrid
       SESSIONGRID_RUNTIME_DIR: /app/runtime_data
+      SESSIONGRID_AUTO_CREATE_SCHEMA: "false"
+    volumes:
+      - sessiongrid_runtime:/app/runtime_data
+    command:
+      - sh
+      - -c
+      - alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 volumes:
-  sessiongrid_data:
-  sessiongrid_db:
+  sessiongrid_runtime:
+  sessiongrid_postgres:

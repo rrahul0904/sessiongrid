@@ -14,4 +14,16 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
-      - run: pytest -q
+      - name: Compile
+        run: python -m compileall -q app alembic
+      - name: Unit and API tests
+        run: pytest -q
+      - name: Migration round-trip
+        env:
+          SESSIONGRID_DATABASE_URL: sqlite:///./migration_test.db
+          SESSIONGRID_AUTO_CREATE_SCHEMA: "false"
+        run: |
+          rm -f migration_test.db
+          alembic upgrade head
+          alembic downgrade base
+          rm -f migration_test.db
