@@ -4,10 +4,15 @@ SessionGrid is a policy-aware multi-session social operations control plane for 
 
 > **Scope:** secure isolation, remote workspaces, team access, auditability, human approvals, QA, support, localization, and policy-aware automation. SessionGrid deliberately does not implement fingerprint spoofing, CAPTCHA bypass, ban evasion, mass account creation, engagement manipulation, or stealth automation.
 
-## Current implementation — Phase 2 runtime-orchestration foundation
+## Current implementation — Phase 3 workflows and human approvals
 
-The repository now contains a runnable browser MVP plus the first multi-tenant control-plane foundation:
+The repository now contains a runnable browser MVP, multi-tenant control plane, durable runtime lifecycle, and the first human-approved workflow engine:
 
+- versioned workflow definitions and durable workflow/step runs
+- human approval records with approve/reject/resume semantics
+- typed workflow steps: note, require_artifact, approval
+- built-in evidence-review workflow that requires real captured evidence
+- Automation UI with recent runs and pending reviewer approvals
 - durable runtime task records, worker assignment and leases
 - idempotent session starts via `Idempotency-Key`
 - explicit screenshot evidence capture with SHA-256
@@ -31,7 +36,7 @@ The repository now contains a runnable browser MVP plus the first multi-tenant c
 - Docker packaging
 - migration/API tests and CI
 
-This is **not yet the final production platform**. The lifecycle is now durable, but execution still happens in the API process. A separate authenticated worker service, lease renewal/recovery, encrypted remote profile-state storage, WebRTC streaming, durable workflow execution, AI agents and Android workers remain later phases.
+This is **not yet the final production platform**. Runtime execution and workflow advancement are still local/in-process. A separate authenticated worker service, periodic lease recovery, encrypted remote profile-state storage, WebRTC streaming, a distributed workflow backend such as Temporal, policy-aware side effects, AI agents and Android workers remain later phases.
 
 ## Quick start — lightweight SQLite
 
@@ -108,6 +113,13 @@ GET  /api/v1/runtime/tasks
 GET  /api/v1/runtime/leases
 GET  /api/v1/artifacts
 GET  /api/v1/artifacts/{id}/content
+GET  /api/v1/workflows/definitions
+POST /api/v1/workflows/definitions
+POST /api/v1/workflows/definitions/{id}/runs
+GET  /api/v1/workflows/runs
+GET  /api/v1/workflows/runs/{id}
+GET  /api/v1/approvals
+POST /api/v1/approvals/{id}/decision
 
 GET  /api/profiles
 POST /api/profiles
@@ -165,12 +177,12 @@ docker-compose.yml    PostgreSQL local stack
 3. encrypted profile-state snapshots + S3-compatible ArtifactStore
 4. structured telemetry and richer cost attribution
 5. WebRTC streaming and control ownership
-6. Temporal workflows and approval service
+6. distributed workflow execution + policy service
 7. bounded evidence-aware AI agents
 8. Android runtime provider
 9. enterprise OIDC/SAML/SCIM and private pools
 
-See `docs/RUNTIME_ORCHESTRATION.md`, `docs/IMPLEMENTATION_PLAN.md`, `docs/ARCHITECTURE.md`, and `docs/SECURITY.md`.
+See `docs/RUNTIME_ORCHESTRATION.md`, `docs/WORKFLOW_ENGINE.md`, `docs/IMPLEMENTATION_PLAN.md`, `docs/ARCHITECTURE.md`, and `docs/SECURITY.md`.
 
 ## License
 
