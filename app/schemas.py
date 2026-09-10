@@ -97,3 +97,20 @@ class PointerInput(BaseModel):
 
 class TextInput(BaseModel):
     text: str = Field(max_length=2000)
+
+
+class WorkflowDefinitionCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=160)
+    slug: str = Field(min_length=2, max_length=120, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    version: int = Field(default=1, ge=1)
+    definition: dict
+
+
+class WorkflowRunCreate(BaseModel):
+    profile_id: int | None = None
+    input: dict = Field(default_factory=dict)
+
+
+class ApprovalDecision(BaseModel):
+    decision: str = Field(pattern=r"^(approved|rejected)$")
+    reason: str | None = Field(default=None, max_length=4000)
