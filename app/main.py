@@ -14,6 +14,7 @@ from app.config import settings
 from app.db import Base, SessionLocal, engine, get_db
 from app.models import (
     ApiKey,
+    Approval,
     Artifact,
     AuditEvent,
     BrowserSession,
@@ -25,10 +26,14 @@ from app.models import (
     RuntimeWorker,
     UsageEvent,
     User,
+    WorkflowDefinition,
+    WorkflowRun,
+    WorkflowStepRun,
     Workspace,
 )
 from app.schemas import (
     ApiKeyCreate,
+    ApprovalDecision,
     MemberCreate,
     OrganizationCreate,
     OrganizationOut,
@@ -37,6 +42,8 @@ from app.schemas import (
     ProfileOut,
     SessionOut,
     TextInput,
+    WorkflowDefinitionCreate,
+    WorkflowRunCreate,
     WorkspaceCreate,
     WorkspaceOut,
 )
@@ -44,6 +51,7 @@ from app.services.artifacts import artifact_store
 from app.services.audit import record_audit
 from app.services.orchestrator import runtime_orchestrator
 from app.services.runtime import runtime_manager
+from app.services.workflows import canonical_json, workflow_engine
 
 
 def _safe_commit(db: Session, conflict_message: str) -> None:
@@ -157,6 +165,7 @@ def seed() -> None:
             )
 
         db.commit()
+        workflow_engine.ensure_builtin_definition(db, org.id, user.id)
 
 
 @asynccontextmanager
@@ -173,7 +182,7 @@ async def lifespan(app: FastAPI):
     await runtime_manager.close()
 
 
-app = FastAPI(title=settings.app_name, version="0.3.0", lifespan=lifespan)
+app = FastAPI(title=settings.app_name, version="0.4.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 
@@ -204,7 +213,7 @@ def health():
         "status": "ok",
         "service": settings.app_name,
         "environment": settings.env,
-        "version": "0.3.0",
+        "version": "0.4.0",
         "auth_required": settings.auth_required,
     }
 
@@ -263,6 +272,7 @@ def create_organization(
         raise HTTPException(status.HTTP_409_CONFLICT, "Organization slug already exists") from exc
 
     db.refresh(org)
+    workflow_engine.ensure_builtin_definition(db, org.id, principal.user_id)
     record_audit(
         db,
         organization_id=org.id,
@@ -1009,6 +1019,268 @@ def runtime_leases(
         }
         for lease in leases
     ]
+
+
+
+
+def _workflow_run_detail(db: Session, run: WorkflowRun) -> dict:
+    steps = db.scalars(
+        select(WorkflowStepRun)
+        .where(WorkflowStepRun.run_id == run.id)
+        .order_by(WorkflowStepRun.step_index)
+    ).all()
+    approvals = db.scalars(
+        select(Approval)
+        .where(Approval.run_id == run.id)
+        .order_by(Approval.id)
+    ).all()
+    return {
+        "id": run.id,
+        "definition_id": run.definition_id,
+        "profile_id": run.profile_id,
+        "status": run.status,
+        "current_step_index": run.current_step_index,
+        "input": run.input,
+        "output": run.output,
+        "error": run.error,
+        "created_at": run.created_at,
+        "started_at": run.started_at,
+        "completed_at": run.completed_at,
+        "steps": [
+            {
+                "id": step.id,
+                "step_index": step.step_index,
+                "step_key": step.step_key,
+                "step_type": step.step_type,
+                "status": step.status,
+                "input": step.input,
+                "output": step.output,
+                "error": step.error,
+                "started_at": step.started_at,
+                "completed_at": step.completed_at,
+            }
+            for step in steps
+        ],
+        "approvals": [
+            {
+                "id": approval.id,
+                "step_run_id": approval.step_run_id,
+                "status": approval.status,
+                "prompt": approval.prompt,
+                "requested_by": approval.requested_by,
+                "decided_by": approval.decided_by,
+                "reason": approval.reason,
+                "requested_at": approval.requested_at,
+                "decided_at": approval.decided_at,
+            }
+            for approval in approvals
+        ],
+    }
+
+
+@app.get("/api/v1/workflows/definitions")
+def list_workflow_definitions(
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+):
+    definitions = db.scalars(
+        select(WorkflowDefinition)
+        .where(WorkflowDefinition.organization_id == principal.organization_id)
+        .order_by(WorkflowDefinition.slug, WorkflowDefinition.version.desc())
+    ).all()
+    return [
+        {
+            "id": definition.id,
+            "name": definition.name,
+            "slug": definition.slug,
+            "version": definition.version,
+            "is_active": definition.is_active,
+            "definition": definition.definition,
+            "created_at": definition.created_at,
+        }
+        for definition in definitions
+    ]
+
+
+@app.post("/api/v1/workflows/definitions", status_code=status.HTTP_201_CREATED)
+def create_workflow_definition(
+    payload: WorkflowDefinitionCreate,
+    principal: Principal = Depends(require_role("manager")),
+    db: Session = Depends(get_db),
+):
+    normalized_steps = workflow_engine.validate_definition(payload.definition)
+    definition_payload = {"steps": normalized_steps}
+    definition = WorkflowDefinition(
+        organization_id=principal.organization_id,
+        name=payload.name,
+        slug=payload.slug,
+        version=payload.version,
+        is_active=True,
+        definition=canonical_json(definition_payload),
+        created_by_user_id=principal.user_id,
+    )
+    db.add(definition)
+    _safe_commit(db, "Workflow slug/version already exists")
+    db.refresh(definition)
+    record_audit(
+        db,
+        organization_id=principal.organization_id,
+        actor=principal.actor,
+        action="workflow.definition_created",
+        resource_type="workflow_definition",
+        resource_id=definition.id,
+        detail=f"{definition.slug}:v{definition.version}",
+    )
+    return {
+        "id": definition.id,
+        "name": definition.name,
+        "slug": definition.slug,
+        "version": definition.version,
+        "is_active": definition.is_active,
+        "definition": definition.definition,
+    }
+
+
+@app.post("/api/v1/workflows/definitions/{definition_id}/runs", status_code=status.HTTP_201_CREATED)
+def start_workflow_run(
+    definition_id: int,
+    payload: WorkflowRunCreate,
+    principal: Principal = Depends(require_role("operator")),
+    db: Session = Depends(get_db),
+):
+    definition = db.scalar(
+        select(WorkflowDefinition).where(
+            WorkflowDefinition.id == definition_id,
+            WorkflowDefinition.organization_id == principal.organization_id,
+        )
+    )
+    if not definition:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Workflow definition not found")
+
+    run = workflow_engine.start_run(
+        db,
+        definition=definition,
+        profile_id=payload.profile_id,
+        input_payload=payload.input,
+        user_id=principal.user_id,
+        actor=principal.actor,
+    )
+    record_audit(
+        db,
+        organization_id=principal.organization_id,
+        actor=principal.actor,
+        action="workflow.run_started",
+        resource_type="workflow_run",
+        resource_id=run.id,
+        detail=f"definition={definition.id};status={run.status}",
+    )
+    return _workflow_run_detail(db, run)
+
+
+@app.get("/api/v1/workflows/runs")
+def list_workflow_runs(
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+):
+    runs = db.scalars(
+        select(WorkflowRun)
+        .where(WorkflowRun.organization_id == principal.organization_id)
+        .order_by(WorkflowRun.id.desc())
+        .limit(100)
+    ).all()
+    return [
+        {
+            "id": run.id,
+            "definition_id": run.definition_id,
+            "profile_id": run.profile_id,
+            "status": run.status,
+            "current_step_index": run.current_step_index,
+            "error": run.error,
+            "created_at": run.created_at,
+            "completed_at": run.completed_at,
+        }
+        for run in runs
+    ]
+
+
+@app.get("/api/v1/workflows/runs/{run_id}")
+def get_workflow_run(
+    run_id: int,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+):
+    run = db.scalar(
+        select(WorkflowRun).where(
+            WorkflowRun.id == run_id,
+            WorkflowRun.organization_id == principal.organization_id,
+        )
+    )
+    if not run:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Workflow run not found")
+    return _workflow_run_detail(db, run)
+
+
+@app.get("/api/v1/approvals")
+def list_approvals(
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+):
+    approvals = db.scalars(
+        select(Approval)
+        .where(Approval.organization_id == principal.organization_id)
+        .order_by(Approval.id.desc())
+        .limit(100)
+    ).all()
+    return [
+        {
+            "id": approval.id,
+            "run_id": approval.run_id,
+            "step_run_id": approval.step_run_id,
+            "status": approval.status,
+            "prompt": approval.prompt,
+            "requested_by": approval.requested_by,
+            "decided_by": approval.decided_by,
+            "reason": approval.reason,
+            "requested_at": approval.requested_at,
+            "decided_at": approval.decided_at,
+        }
+        for approval in approvals
+    ]
+
+
+@app.post("/api/v1/approvals/{approval_id}/decision")
+def decide_approval(
+    approval_id: int,
+    payload: ApprovalDecision,
+    principal: Principal = Depends(require_role("reviewer")),
+    db: Session = Depends(get_db),
+):
+    approval = db.scalar(
+        select(Approval).where(
+            Approval.id == approval_id,
+            Approval.organization_id == principal.organization_id,
+        )
+    )
+    if not approval:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Approval not found")
+
+    run = workflow_engine.decide(
+        db,
+        approval=approval,
+        decision=payload.decision,
+        reason=payload.reason,
+        actor=principal.actor,
+    )
+    record_audit(
+        db,
+        organization_id=principal.organization_id,
+        actor=principal.actor,
+        action=f"approval.{payload.decision}",
+        resource_type="approval",
+        resource_id=approval.id,
+        detail=f"workflow_run={run.id};reason={payload.reason or ''}",
+    )
+    return _workflow_run_detail(db, run)
 
 
 @app.get("/api/v1/usage")

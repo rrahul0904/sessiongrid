@@ -16,6 +16,8 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Compile
         run: python -m compileall -q app alembic
+      - name: Browser UI JavaScript syntax
+        run: node --check app/static/app.js
       - name: Unit and API tests
         run: pytest -q
       - name: Migration round-trip

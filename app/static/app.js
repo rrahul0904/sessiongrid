@@ -1,15 +1,15 @@
-const state={profiles:[],sessions:[],overview:null};
+const state={profiles:[],sessions:[],overview:null,workflows:[],runs:[],approvals:[]};
 const $=s=>document.querySelector(s);
 const toast=m=>{const t=$("#toast");t.textContent=m;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),1800)};
 async function api(path,options={}){const r=await fetch(path,{headers:{"Content-Type":"application/json"},...options});if(!r.ok){let d={};try{d=await r.json()}catch{}throw new Error(d.detail||("Request failed: "+r.status))}return r.status===204?null:r.json()}
 function activeSession(profileId){return state.sessions.find(s=>s.profile_id===profileId&&s.status==="running")}
+function escapeHtml(v=""){return String(v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]))}
 function card(p){const s=activeSession(p.id);const running=!!s;const statusClass=p.status==="error"?"error":running?"":"offline";return `
 <article class="card" data-profile="${p.id}">
  <div class="card-head"><div><b>${escapeHtml(p.name)}</b><small>${escapeHtml(p.platform)} · ${escapeHtml(p.owner)}</small></div><span class="status ${statusClass}">${running?"● ONLINE":p.status==="error"?"ERROR":"READY"}</span></div>
  <div class="screen">${running?`<img src="/api/profiles/${p.id}/frame?ts=${Date.now()}" alt="${escapeHtml(p.name)}"><div class="screen-overlay" data-pointer="${p.id}"></div>`:`<div class="placeholder"><strong>${escapeHtml(p.platform)}</strong>Persistent workspace is offline</div>`}</div>
  <div class="actions">${running?`<button data-stop="${p.id}">Stop</button><button data-shot="${p.id}">Refresh</button><button data-capture="${p.id}">Evidence</button><button data-text="${p.id}">Type</button>`:`<button data-start="${p.id}">Start session</button>`}</div>
 </article>`}
-function escapeHtml(v=""){return String(v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]))}
 function render(){
  const o=state.overview||{profiles:0,active_sessions:0,audit_events:0,screenshots:0};
  $("#metrics").innerHTML=[
@@ -22,7 +22,15 @@ function render(){
  $("#session-grid").innerHTML=cards||'<div class="panel">No profiles yet.</div>';
  $("#screen-wall").innerHTML=cards||'<div class="panel">No profiles yet.</div>';
  $("#profile-table").innerHTML=state.profiles.map(p=>`<div class="row"><div><b>${escapeHtml(p.name)}</b><small>${escapeHtml(p.platform)}</small></div><span>${escapeHtml(p.owner)}</span><span class="chip">${escapeHtml(p.locale)}</span><span>${escapeHtml(p.network_label)}</span><span>${escapeHtml(p.status)}</span></div>`).join("");
+ renderAutomation();
  wireCards();
+}
+function renderAutomation(){
+ $("#workflow-definitions").innerHTML=state.workflows.map(w=>`<div class="compact-row"><div><b>${escapeHtml(w.name)}</b><small>${escapeHtml(w.slug)} · v${w.version}</small></div><span class="chip">${w.is_active?"ACTIVE":"INACTIVE"}</span><span>#${w.id}</span></div>`).join("")||'<div class="compact-row"><small>No workflow definitions.</small></div>';
+ $("#workflow-runs").innerHTML=state.runs.slice(0,12).map(r=>`<div class="compact-row"><div><b>Run #${r.id}</b><small>Definition #${r.definition_id}${r.profile_id?" · Profile #"+r.profile_id:""}</small></div><span class="chip">${escapeHtml(r.status)}</span><span>${r.error?escapeHtml(r.error):"Step "+r.current_step_index}</span></div>`).join("")||'<div class="compact-row"><small>No workflow runs yet.</small></div>';
+ const pending=state.approvals.filter(a=>a.status==="pending");
+ $("#approval-list").innerHTML=pending.map(a=>`<div class="compact-row"><div><b>${escapeHtml(a.prompt)}</b><small>Run #${a.run_id} · requested by ${escapeHtml(a.requested_by)}</small></div><span class="chip">PENDING</span><div class="approval-actions"><button data-approve="${a.id}">Approve</button><button class="reject" data-reject="${a.id}">Reject</button></div></div>`).join("")||'<div class="compact-row"><div><b>No pending approvals</b><small>Reviewer queue is clear.</small></div><span class="chip">CLEAR</span><span></span></div>';
+ wireApprovals();
 }
 function wireCards(){
  document.querySelectorAll("[data-start]").forEach(b=>b.onclick=()=>action(async()=>{await api(`/api/profiles/${b.dataset.start}/start`,{method:"POST"});toast("Session started")}));
@@ -32,16 +40,29 @@ function wireCards(){
  document.querySelectorAll("[data-text]").forEach(b=>b.onclick=async()=>{const text=prompt("Text to send to the active page");if(text!==null)await action(()=>api(`/api/profiles/${b.dataset.text}/input/text`,{method:"POST",body:JSON.stringify({text})}))});
  document.querySelectorAll("[data-pointer]").forEach(el=>el.onclick=async e=>{const rect=el.getBoundingClientRect();const x=(e.clientX-rect.left)*(430/rect.width);const y=(e.clientY-rect.top)*(820/rect.height);await action(()=>api(`/api/profiles/${el.dataset.pointer}/input/pointer`,{method:"POST",body:JSON.stringify({x,y})}),false)});
 }
+function wireApprovals(){
+ document.querySelectorAll("[data-approve]").forEach(b=>b.onclick=()=>action(async()=>{const reason=prompt("Approval note (optional)")||null;await api(`/api/v1/approvals/${b.dataset.approve}/decision`,{method:"POST",body:JSON.stringify({decision:"approved",reason})});toast("Workflow approved")}));
+ document.querySelectorAll("[data-reject]").forEach(b=>b.onclick=()=>action(async()=>{const reason=prompt("Reason for rejection")||"Rejected by reviewer";await api(`/api/v1/approvals/${b.dataset.reject}/decision`,{method:"POST",body:JSON.stringify({decision:"rejected",reason})});toast("Workflow rejected")}));
+}
 async function load(){
  try{
-  const [health,overview,profiles,sessions,audit]=await Promise.all([api("/api/health"),api("/api/overview"),api("/api/profiles"),api("/api/sessions"),api("/api/audit")]);
+  const [health,overview,profiles,sessions,audit,workflows,runs,approvals]=await Promise.all([
+   api("/api/health"),
+   api("/api/overview"),
+   api("/api/profiles"),
+   api("/api/sessions"),
+   api("/api/audit"),
+   api("/api/v1/workflows/definitions"),
+   api("/api/v1/workflows/runs"),
+   api("/api/v1/approvals")
+  ]);
   $("#health-label").textContent=health.status==="ok"?"Control plane online":"Degraded";
-  state.overview=overview;state.profiles=profiles;state.sessions=sessions;render();
+  state.overview=overview;state.profiles=profiles;state.sessions=sessions;state.workflows=workflows;state.runs=runs;state.approvals=approvals;render();
   $("#audit-list").innerHTML=audit.map(e=>`<div class="audit-row"><small>${new Date(e.created_at).toLocaleString()}</small><div><b>${escapeHtml(e.action)}</b><small>${escapeHtml(e.detail||"")}</small></div><span>${escapeHtml(e.resource_type)} #${escapeHtml(e.resource_id)}</span></div>`).join("")||"No audit events.";
  }catch(e){$("#health-label").textContent="Unavailable";toast(e.message)}
 }
 async function action(fn,reload=true){try{await fn();if(reload)await load()}catch(e){toast(e.message)}}
-document.querySelectorAll(".nav").forEach(b=>b.onclick=()=>{document.querySelectorAll(".nav").forEach(x=>x.classList.remove("active"));document.querySelectorAll(".view").forEach(x=>x.classList.remove("active"));b.classList.add("active");$("#"+b.dataset.view).classList.add("active");$("#page-title").textContent={dashboard:"Operations overview",screens:"Screen wall",profiles:"Profile inventory",automation:"Automation",audit:"Audit trail"}[b.dataset.view]});
+document.querySelectorAll(".nav").forEach(b=>b.onclick=()=>{document.querySelectorAll(".nav").forEach(x=>x.classList.remove("active"));document.querySelectorAll(".view").forEach(x=>x.classList.remove("active"));b.classList.add("active");$("#"+b.dataset.view).classList.add("active");$("#page-title").textContent={dashboard:"Operations overview",screens:"Screen wall",profiles:"Profile inventory",automation:"Workflows & approvals",audit:"Audit trail"}[b.dataset.view]});
 $("#refresh").onclick=load;
 $("#new-profile").onclick=()=>$("#profile-dialog").showModal();
 $("#close-dialog").onclick=$("#cancel-dialog").onclick=()=>$("#profile-dialog").close();
