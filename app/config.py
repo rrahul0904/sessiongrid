@@ -29,9 +29,22 @@ class Settings(BaseSettings):
     default_organization_slug: str = "sessiongrid-demo"
     default_workspace_name: str = "Default Workspace"
 
+    # Runtime-plane foundation.
+    local_worker_key: str = "local-worker"
+    local_worker_region: str = "local"
+    local_worker_capacity: int = 20
+    lease_ttl_seconds: int = 90
+    artifact_dir: str = "./artifacts"
+
     @property
     def runtime_path(self) -> Path:
         path = Path(self.runtime_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
+    def artifact_path(self) -> Path:
+        path = Path(self.artifact_dir)
         path.mkdir(parents=True, exist_ok=True)
         return path
 
