@@ -24,7 +24,7 @@ def test_health_seed_and_principal():
         health = client.get("/api/health")
         assert health.status_code == 200
         assert health.json()["status"] == "ok"
-        assert health.json()["version"] == "0.2.0"
+        assert health.json()["version"] == "0.3.0"
 
         me = client.get("/api/v1/me")
         assert me.status_code == 200
