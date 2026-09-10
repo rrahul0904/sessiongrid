@@ -165,7 +165,9 @@ async def lifespan(app: FastAPI):
         Base.metadata.create_all(bind=engine)
     seed()
     with SessionLocal() as db:
-        runtime_orchestrator.ensure_local_worker(db)
+        runtime_orchestrator.recover_expired_leases(db)
+        worker = runtime_orchestrator.ensure_local_worker(db)
+        runtime_orchestrator.heartbeat(db, worker)
     await runtime_manager.start()
     yield
     await runtime_manager.close()
@@ -933,7 +935,13 @@ def runtime_workers(
     principal: Principal = Depends(require_role("manager")),
     db: Session = Depends(get_db),
 ):
-    workers = db.scalars(select(RuntimeWorker).order_by(RuntimeWorker.worker_key)).all()
+    workers = db.scalars(
+        select(RuntimeWorker)
+        .join(RuntimeLease, RuntimeLease.worker_id == RuntimeWorker.id)
+        .where(RuntimeLease.organization_id == principal.organization_id)
+        .distinct()
+        .order_by(RuntimeWorker.worker_key)
+    ).all()
     return [
         {
             "id": worker.id,
