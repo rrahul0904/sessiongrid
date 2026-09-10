@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt && \
 
 COPY . .
 
-RUN mkdir -p /app/runtime_data
+RUN mkdir -p /app/runtime_data /app/artifacts
 
 EXPOSE 8000
 

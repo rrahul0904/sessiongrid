@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI, HTTPException, Response, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 from fastapi.requests import Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -14,11 +14,15 @@ from app.config import settings
 from app.db import Base, SessionLocal, engine, get_db
 from app.models import (
     ApiKey,
+    Artifact,
     AuditEvent,
     BrowserSession,
     Membership,
     Organization,
     Profile,
+    RuntimeLease,
+    RuntimeTask,
+    RuntimeWorker,
     UsageEvent,
     User,
     Workspace,
@@ -36,7 +40,9 @@ from app.schemas import (
     WorkspaceCreate,
     WorkspaceOut,
 )
+from app.services.artifacts import artifact_store
 from app.services.audit import record_audit
+from app.services.orchestrator import runtime_orchestrator
 from app.services.runtime import runtime_manager
 
 
@@ -158,12 +164,16 @@ async def lifespan(app: FastAPI):
     if settings.auto_create_schema:
         Base.metadata.create_all(bind=engine)
     seed()
+    with SessionLocal() as db:
+        runtime_orchestrator.recover_expired_leases(db)
+        worker = runtime_orchestrator.ensure_local_worker(db)
+        runtime_orchestrator.heartbeat(db, worker)
     await runtime_manager.start()
     yield
     await runtime_manager.close()
 
 
-app = FastAPI(title=settings.app_name, version="0.2.0", lifespan=lifespan)
+app = FastAPI(title=settings.app_name, version="0.3.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 
@@ -194,7 +204,7 @@ def health():
         "status": "ok",
         "service": settings.app_name,
         "environment": settings.env,
-        "version": "0.2.0",
+        "version": "0.3.0",
         "auth_required": settings.auth_required,
     }
 
@@ -471,6 +481,18 @@ def overview(
         "runtime_mode": "local-playwright",
         "concurrency_limit": org.concurrency_limit,
         "organization_id": org_id,
+        "queued_runtime_tasks": db.scalar(
+            select(func.count(RuntimeTask.id)).where(
+                RuntimeTask.organization_id == org_id,
+                RuntimeTask.status.in_(("queued", "running")),
+            )
+        ) or 0,
+        "active_runtime_leases": db.scalar(
+            select(func.count(RuntimeLease.id)).where(
+                RuntimeLease.organization_id == org_id,
+                RuntimeLease.status == "active",
+            )
+        ) or 0,
     }
 
 
@@ -557,44 +579,48 @@ def list_sessions(
 @app.post("/api/profiles/{profile_id}/start", response_model=SessionOut)
 async def start_session(
     profile_id: int,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     principal: Principal = Depends(require_role("operator")),
     db: Session = Depends(get_db),
 ):
     profile = _profile_for_org(db, profile_id, principal.organization_id)
 
-    running = db.scalar(
-        select(BrowserSession).where(
+    existing_active = db.scalar(
+        select(BrowserSession)
+        .where(
             BrowserSession.organization_id == principal.organization_id,
             BrowserSession.profile_id == profile_id,
-            BrowserSession.status == "running",
+            BrowserSession.status.in_(("queued", "provisioning", "running")),
         )
+        .order_by(BrowserSession.id.desc())
     )
-    if running:
-        return running
+    if existing_active and not idempotency_key:
+        return existing_active
+
+    existing_idempotent = runtime_orchestrator.find_idempotent_session(
+        db,
+        principal.organization_id,
+        idempotency_key,
+    )
+    if existing_idempotent:
+        return existing_idempotent
 
     org = db.get(Organization, principal.organization_id)
-    active_count = db.scalar(
-        select(func.count(BrowserSession.id)).where(
-            BrowserSession.organization_id == principal.organization_id,
-            BrowserSession.status == "running",
-        )
-    ) or 0
-    if active_count >= org.concurrency_limit:
+    if runtime_orchestrator.active_session_count(db, principal.organization_id) >= org.concurrency_limit:
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
             f"Organization concurrency limit reached ({org.concurrency_limit})",
         )
 
-    session = BrowserSession(
-        organization_id=principal.organization_id,
-        profile_id=profile_id,
-        status="starting",
-        runtime_type="browser",
-        worker_id="local",
+    session, task, created = runtime_orchestrator.enqueue_start(
+        db,
+        profile,
+        idempotency_key,
     )
-    db.add(session)
-    db.commit()
-    db.refresh(session)
+    if not created:
+        return session
+
+    runtime_orchestrator.acquire_local_lease(db, session, task)
 
     try:
         runtime = await runtime_manager.launch(
@@ -603,9 +629,13 @@ async def start_session(
             locale=profile.locale,
             timezone=profile.timezone,
         )
-        session.status = "running"
-        session.current_url = runtime.page.url
-        session.current_title = await runtime.page.title()
+        runtime_orchestrator.complete_start(
+            db,
+            session,
+            task,
+            current_url=runtime.page.url,
+            current_title=await runtime.page.title(),
+        )
         profile.status = "online"
         db.add(
             UsageEvent(
@@ -625,11 +655,11 @@ async def start_session(
             action="session.started",
             resource_type="profile",
             resource_id=profile_id,
+            detail=f"session={session.id};worker={session.worker_id}",
         )
         return session
     except Exception as exc:
-        session.status = "error"
-        session.error = str(exc)[:4000]
+        runtime_orchestrator.fail_start(db, session, task, str(exc))
         profile.status = "error"
         db.commit()
         db.refresh(session)
@@ -644,7 +674,6 @@ async def start_session(
         )
         return session
 
-
 @app.post("/api/profiles/{profile_id}/stop")
 async def stop_session(
     profile_id: int,
@@ -652,25 +681,34 @@ async def stop_session(
     db: Session = Depends(get_db),
 ):
     profile = _profile_for_org(db, profile_id, principal.organization_id)
-    await runtime_manager.stop(profile_id)
-
     session = db.scalar(
         select(BrowserSession)
         .where(
             BrowserSession.organization_id == principal.organization_id,
             BrowserSession.profile_id == profile_id,
-            BrowserSession.status == "running",
+            BrowserSession.status.in_(("queued", "provisioning", "running")),
         )
         .order_by(BrowserSession.id.desc())
     )
-    if session:
+    if not session:
+        profile.status = "ready"
+        db.commit()
+        return {"ok": True, "status": "already_stopped"}
+
+    task = runtime_orchestrator.enqueue_stop(db, session)
+    runtime_orchestrator.mark_stop_running(db, task)
+
+    try:
+        await runtime_manager.stop(profile_id)
+
         now = datetime.now(timezone.utc)
         started = session.started_at
         if started.tzinfo is None:
             started = started.replace(tzinfo=timezone.utc)
         runtime_seconds = max(0, int((now - started).total_seconds()))
-        session.status = "stopped"
-        session.stopped_at = now
+
+        runtime_orchestrator.complete_stop(db, session, task)
+        profile.status = "ready"
         db.add(
             UsageEvent(
                 organization_id=principal.organization_id,
@@ -680,19 +718,29 @@ async def stop_session(
                 unit="second",
             )
         )
-
-    profile.status = "ready"
-    db.commit()
-    record_audit(
-        db,
-        organization_id=principal.organization_id,
-        actor=principal.actor,
-        action="session.stopped",
-        resource_type="profile",
-        resource_id=profile_id,
-    )
-    return {"ok": True}
-
+        db.commit()
+        record_audit(
+            db,
+            organization_id=principal.organization_id,
+            actor=principal.actor,
+            action="session.stopped",
+            resource_type="profile",
+            resource_id=profile_id,
+            detail=f"session={session.id};runtime_seconds={runtime_seconds}",
+        )
+        return {"ok": True, "status": "stopped"}
+    except Exception as exc:
+        runtime_orchestrator.fail_stop(db, task, str(exc))
+        record_audit(
+            db,
+            organization_id=principal.organization_id,
+            actor=principal.actor,
+            action="session.stop_failed",
+            resource_type="profile",
+            resource_id=profile_id,
+            detail=str(exc)[:4000],
+        )
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Runtime stop failed") from exc
 
 @app.get("/api/profiles/{profile_id}/frame")
 async def frame(
@@ -757,6 +805,210 @@ async def text_input(
     except RuntimeError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return {"ok": True}
+
+
+
+
+@app.post("/api/profiles/{profile_id}/capture", status_code=status.HTTP_201_CREATED)
+async def capture_evidence(
+    profile_id: int,
+    principal: Principal = Depends(require_role("reviewer")),
+    db: Session = Depends(get_db),
+):
+    _profile_for_org(db, profile_id, principal.organization_id)
+    session = db.scalar(
+        select(BrowserSession)
+        .where(
+            BrowserSession.organization_id == principal.organization_id,
+            BrowserSession.profile_id == profile_id,
+            BrowserSession.status == "running",
+        )
+        .order_by(BrowserSession.id.desc())
+    )
+    if not session:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Profile has no running session")
+
+    try:
+        image = await runtime_manager.screenshot(profile_id)
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+    stored = artifact_store.put(
+        organization_id=principal.organization_id,
+        profile_id=profile_id,
+        session_id=session.id,
+        kind="screenshot",
+        content=image,
+        content_type="image/jpeg",
+        extension="jpg",
+    )
+    artifact = Artifact(
+        organization_id=principal.organization_id,
+        profile_id=profile_id,
+        session_id=session.id,
+        kind="screenshot",
+        storage_key=stored.storage_key,
+        content_type=stored.content_type,
+        size_bytes=stored.size_bytes,
+        sha256=stored.sha256,
+    )
+    db.add(artifact)
+    db.commit()
+    db.refresh(artifact)
+    record_audit(
+        db,
+        organization_id=principal.organization_id,
+        actor=principal.actor,
+        action="artifact.captured",
+        resource_type="artifact",
+        resource_id=artifact.id,
+        detail=f"profile={profile_id};sha256={artifact.sha256}",
+    )
+    return {
+        "id": artifact.id,
+        "profile_id": artifact.profile_id,
+        "session_id": artifact.session_id,
+        "kind": artifact.kind,
+        "content_type": artifact.content_type,
+        "size_bytes": artifact.size_bytes,
+        "sha256": artifact.sha256,
+        "created_at": artifact.created_at,
+    }
+
+
+@app.get("/api/v1/artifacts")
+def list_artifacts(
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+):
+    artifacts = db.scalars(
+        select(Artifact)
+        .where(Artifact.organization_id == principal.organization_id)
+        .order_by(Artifact.id.desc())
+        .limit(100)
+    ).all()
+    return [
+        {
+            "id": item.id,
+            "profile_id": item.profile_id,
+            "session_id": item.session_id,
+            "kind": item.kind,
+            "content_type": item.content_type,
+            "size_bytes": item.size_bytes,
+            "sha256": item.sha256,
+            "created_at": item.created_at,
+        }
+        for item in artifacts
+    ]
+
+
+@app.get("/api/v1/artifacts/{artifact_id}/content")
+def artifact_content(
+    artifact_id: int,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+):
+    artifact = db.scalar(
+        select(Artifact).where(
+            Artifact.id == artifact_id,
+            Artifact.organization_id == principal.organization_id,
+        )
+    )
+    if not artifact:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Artifact not found")
+    try:
+        content = artifact_store.get(artifact.storage_key)
+    except FileNotFoundError as exc:
+        raise HTTPException(status.HTTP_410_GONE, "Artifact content is unavailable") from exc
+    return Response(
+        content=content,
+        media_type=artifact.content_type,
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-SHA256": artifact.sha256,
+        },
+    )
+
+
+@app.get("/api/v1/runtime/workers")
+def runtime_workers(
+    principal: Principal = Depends(require_role("manager")),
+    db: Session = Depends(get_db),
+):
+    workers = db.scalars(
+        select(RuntimeWorker)
+        .join(RuntimeLease, RuntimeLease.worker_id == RuntimeWorker.id)
+        .where(RuntimeLease.organization_id == principal.organization_id)
+        .distinct()
+        .order_by(RuntimeWorker.worker_key)
+    ).all()
+    return [
+        {
+            "id": worker.id,
+            "worker_key": worker.worker_key,
+            "region": worker.region,
+            "status": worker.status,
+            "capacity": worker.capacity,
+            "capabilities": worker.capabilities,
+            "last_heartbeat_at": worker.last_heartbeat_at,
+        }
+        for worker in workers
+    ]
+
+
+@app.get("/api/v1/runtime/tasks")
+def runtime_tasks(
+    principal: Principal = Depends(require_role("manager")),
+    db: Session = Depends(get_db),
+):
+    tasks = db.scalars(
+        select(RuntimeTask)
+        .where(RuntimeTask.organization_id == principal.organization_id)
+        .order_by(RuntimeTask.id.desc())
+        .limit(100)
+    ).all()
+    return [
+        {
+            "id": task.id,
+            "session_id": task.session_id,
+            "profile_id": task.profile_id,
+            "task_type": task.task_type,
+            "status": task.status,
+            "attempt_count": task.attempt_count,
+            "max_attempts": task.max_attempts,
+            "locked_by": task.locked_by,
+            "error": task.error,
+            "created_at": task.created_at,
+            "updated_at": task.updated_at,
+        }
+        for task in tasks
+    ]
+
+
+@app.get("/api/v1/runtime/leases")
+def runtime_leases(
+    principal: Principal = Depends(require_role("manager")),
+    db: Session = Depends(get_db),
+):
+    leases = db.scalars(
+        select(RuntimeLease)
+        .where(RuntimeLease.organization_id == principal.organization_id)
+        .order_by(RuntimeLease.id.desc())
+        .limit(100)
+    ).all()
+    return [
+        {
+            "id": lease.id,
+            "session_id": lease.session_id,
+            "profile_id": lease.profile_id,
+            "worker_id": lease.worker_id,
+            "status": lease.status,
+            "acquired_at": lease.acquired_at,
+            "expires_at": lease.expires_at,
+            "released_at": lease.released_at,
+        }
+        for lease in leases
+    ]
 
 
 @app.get("/api/v1/usage")

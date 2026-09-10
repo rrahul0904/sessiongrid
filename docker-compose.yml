@@ -25,9 +25,11 @@ services:
     environment:
       SESSIONGRID_DATABASE_URL: postgresql+psycopg://sessiongrid:sessiongrid@postgres:5432/sessiongrid
       SESSIONGRID_RUNTIME_DIR: /app/runtime_data
+      SESSIONGRID_ARTIFACT_DIR: /app/artifacts
       SESSIONGRID_AUTO_CREATE_SCHEMA: "false"
     volumes:
       - sessiongrid_runtime:/app/runtime_data
+      - sessiongrid_artifacts:/app/artifacts
     command:
       - sh
       - -c
@@ -35,4 +37,5 @@ services:
 
 volumes:
   sessiongrid_runtime:
+  sessiongrid_artifacts:
   sessiongrid_postgres:

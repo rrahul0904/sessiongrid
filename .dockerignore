@@ -6,5 +6,7 @@ __pycache__
 *.db
 runtime_data
 test_runtime_data
+artifacts
+test_artifacts
 .env
 .DS_Store

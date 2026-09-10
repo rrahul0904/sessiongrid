@@ -8,6 +8,8 @@ htmlcov/
 *.db
 runtime_data/
 test_runtime_data/
+artifacts/
+test_artifacts/
 .DS_Store
 .idea/
 .vscode/
