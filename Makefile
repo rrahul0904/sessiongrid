@@ -1,4 +1,4 @@
-.PHONY: install dev test docker-up docker-down
+.PHONY: install dev test migrate downgrade docker-up docker-down
 
 install:
 	python -m pip install -r requirements.txt
@@ -9,6 +9,12 @@ dev:
 
 test:
 	pytest -q
+
+migrate:
+	alembic upgrade head
+
+downgrade:
+	alembic downgrade -1
 
 docker-up:
 	docker compose up --build
