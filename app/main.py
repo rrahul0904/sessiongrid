@@ -171,7 +171,7 @@ async def lifespan(app: FastAPI):
     await runtime_manager.close()
 
 
-app = FastAPI(title=settings.app_name, version="0.2.0", lifespan=lifespan)
+app = FastAPI(title=settings.app_name, version="0.3.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 
@@ -202,7 +202,7 @@ def health():
         "status": "ok",
         "service": settings.app_name,
         "environment": settings.env,
-        "version": "0.2.0",
+        "version": "0.3.0",
         "auth_required": settings.auth_required,
     }
 
@@ -479,6 +479,18 @@ def overview(
         "runtime_mode": "local-playwright",
         "concurrency_limit": org.concurrency_limit,
         "organization_id": org_id,
+        "queued_runtime_tasks": db.scalar(
+            select(func.count(RuntimeTask.id)).where(
+                RuntimeTask.organization_id == org_id,
+                RuntimeTask.status.in_(("queued", "running")),
+            )
+        ) or 0,
+        "active_runtime_leases": db.scalar(
+            select(func.count(RuntimeLease.id)).where(
+                RuntimeLease.organization_id == org_id,
+                RuntimeLease.status == "active",
+            )
+        ) or 0,
     }
 
 
