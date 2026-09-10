@@ -13,13 +13,15 @@
 - [x] Docker + tests + CI
 
 ## Next — Control plane
-- [ ] PostgreSQL + Alembic
-- [ ] organizations/workspaces/users
-- [ ] auth + RBAC
+- [x] PostgreSQL + Alembic
+- [x] organizations/workspaces/users
+- [x] scoped API-key auth + RBAC foundation
+- [ ] OIDC/SAML human authentication
 - [ ] policy service
 - [ ] encrypted secret references
-- [ ] usage ledger
-- [ ] API pagination/idempotency
+- [x] usage ledger foundation
+- [x] session-start idempotency
+- [ ] cursor pagination across large inventories
 - [ ] structured logs + OpenTelemetry
 
 ## Runtime scale
@@ -35,7 +37,7 @@
 - [ ] separate remote worker service
 - [ ] authenticated task claiming
 - [ ] active heartbeat/lease-renewal loop
-- [ ] expired-lease recovery
+- [x] expired-lease startup recovery
 - [ ] encrypted profile-state snapshots
 - [ ] S3-compatible object-store provider
 - [ ] regional placement across remote worker pools
@@ -43,12 +45,15 @@
 - [ ] control ownership/handoff
 
 ## Automation
-- [ ] Temporal
-- [ ] workflow definitions/runs
-- [ ] approval service
-- [ ] evidence model
+- [ ] Temporal / distributed durable execution
+- [x] workflow definitions + versioning
+- [x] durable workflow runs + step runs
+- [x] approval service
+- [x] evidence/artifact requirement step
+- [x] built-in evidence-review template
 - [ ] policy-aware side effects
-- [ ] QA/support/localization templates
+- [ ] runtime action executor steps
+- [ ] QA/support/localization template library
 
 ## AI
 - [ ] bounded agent runtime
