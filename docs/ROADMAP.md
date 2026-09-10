@@ -23,14 +23,22 @@
 - [ ] structured logs + OpenTelemetry
 
 ## Runtime scale
-- [ ] durable session queue
-- [ ] runtime orchestrator
-- [ ] worker registry/heartbeats
-- [ ] encrypted state snapshots
-- [ ] object-storage artifacts
-- [ ] regional placement
-- [ ] concurrency quotas
-- [ ] runtime cost model
+- [x] durable runtime task records
+- [x] runtime orchestrator foundation
+- [x] local worker registry + heartbeat metadata
+- [x] runtime leases
+- [x] organization-scoped start idempotency
+- [x] artifact metadata + local ArtifactStore abstraction
+- [x] explicit evidence capture + SHA-256
+- [x] concurrency quotas
+- [x] runtime-seconds usage ledger
+- [ ] separate remote worker service
+- [ ] authenticated task claiming
+- [ ] active heartbeat/lease-renewal loop
+- [ ] expired-lease recovery
+- [ ] encrypted profile-state snapshots
+- [ ] S3-compatible object-store provider
+- [ ] regional placement across remote worker pools
 - [ ] WebRTC streaming
 - [ ] control ownership/handoff
 
