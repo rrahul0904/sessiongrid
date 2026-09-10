@@ -7,14 +7,14 @@ function card(p){const s=activeSession(p.id);const running=!!s;const statusClass
 <article class="card" data-profile="${p.id}">
  <div class="card-head"><div><b>${escapeHtml(p.name)}</b><small>${escapeHtml(p.platform)} · ${escapeHtml(p.owner)}</small></div><span class="status ${statusClass}">${running?"● ONLINE":p.status==="error"?"ERROR":"READY"}</span></div>
  <div class="screen">${running?`<img src="/api/profiles/${p.id}/frame?ts=${Date.now()}" alt="${escapeHtml(p.name)}"><div class="screen-overlay" data-pointer="${p.id}"></div>`:`<div class="placeholder"><strong>${escapeHtml(p.platform)}</strong>Persistent workspace is offline</div>`}</div>
- <div class="actions">${running?`<button data-stop="${p.id}">Stop</button><button data-shot="${p.id}">Refresh frame</button><button data-text="${p.id}">Type</button>`:`<button data-start="${p.id}">Start session</button>`}</div>
+ <div class="actions">${running?`<button data-stop="${p.id}">Stop</button><button data-shot="${p.id}">Refresh</button><button data-capture="${p.id}">Evidence</button><button data-text="${p.id}">Type</button>`:`<button data-start="${p.id}">Start session</button>`}</div>
 </article>`}
 function escapeHtml(v=""){return String(v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]))}
 function render(){
  const o=state.overview||{profiles:0,active_sessions:0,audit_events:0,screenshots:0};
  $("#metrics").innerHTML=[
   ["Profiles",o.profiles,"persistent workspaces"],
-  ["Active",o.active_sessions,"runtime sessions"],
+  ["Active",o.active_sessions+\" / \"+(o.concurrency_limit||\"—\"),"runtime concurrency"],
   ["Screenshots",o.screenshots,"evidence frames"],
   ["Audit events",o.audit_events,"recorded actions"]
  ].map(x=>`<div class="metric"><span>${x[0]}</span><strong>${x[1]}</strong><small>${x[2]}</small></div>`).join("");
@@ -28,6 +28,7 @@ function wireCards(){
  document.querySelectorAll("[data-start]").forEach(b=>b.onclick=()=>action(async()=>{await api(`/api/profiles/${b.dataset.start}/start`,{method:"POST"});toast("Session started")}));
  document.querySelectorAll("[data-stop]").forEach(b=>b.onclick=()=>action(async()=>{await api(`/api/profiles/${b.dataset.stop}/stop`,{method:"POST"});toast("Session stopped")}));
  document.querySelectorAll("[data-shot]").forEach(b=>b.onclick=()=>{const c=b.closest(".card");const img=c.querySelector("img");if(img)img.src=`/api/profiles/${b.dataset.shot}/frame?ts=${Date.now()}`});
+ document.querySelectorAll("[data-capture]").forEach(b=>b.onclick=()=>action(async()=>{const a=await api(`/api/profiles/${b.dataset.capture}/capture`,{method:"POST"});toast(`Evidence #${a.id} captured`)},false));
  document.querySelectorAll("[data-text]").forEach(b=>b.onclick=async()=>{const text=prompt("Text to send to the active page");if(text!==null)await action(()=>api(`/api/profiles/${b.dataset.text}/input/text`,{method:"POST",body:JSON.stringify({text})}))});
  document.querySelectorAll("[data-pointer]").forEach(el=>el.onclick=async e=>{const rect=el.getBoundingClientRect();const x=(e.clientX-rect.left)*(430/rect.width);const y=(e.clientY-rect.top)*(820/rect.height);await action(()=>api(`/api/profiles/${el.dataset.pointer}/input/pointer`,{method:"POST",body:JSON.stringify({x,y})}),false)});
 }
