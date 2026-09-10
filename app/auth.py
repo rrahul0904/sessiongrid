@@ -58,8 +58,12 @@ def _principal_from_api_key(db: Session, raw_key: str, requested_org: int | None
 
     if not key or key.revoked_at is not None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid API key")
-    if key.expires_at is not None and key.expires_at <= now:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "API key expired")
+    if key.expires_at is not None:
+        expires_at = key.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= now:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "API key expired")
     if requested_org is not None and requested_org != key.organization_id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "API key is scoped to another organization")
 
