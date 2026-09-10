@@ -24,7 +24,7 @@ def test_health_seed_and_principal():
         health = client.get("/api/health")
         assert health.status_code == 200
         assert health.json()["status"] == "ok"
-        assert health.json()["version"] == "0.3.0"
+        assert health.json()["version"] == "0.4.0"
 
         me = client.get("/api/v1/me")
         assert me.status_code == 200
@@ -244,6 +244,100 @@ def test_runtime_orchestration_idempotency_leases_and_artifacts():
             metrics = {row["metric"] for row in usage.json()}
             assert "session_start" in metrics
             assert "runtime_seconds" in metrics
+
+
+
+def test_workflow_waits_for_human_approval_and_resumes():
+    with TestClient(app) as client:
+        definition_response = client.post(
+            "/api/v1/workflows/definitions",
+            json={
+                "name": "Manual Review Test",
+                "slug": "manual-review-test",
+                "version": 1,
+                "definition": {
+                    "steps": [
+                        {
+                            "key": "start",
+                            "type": "note",
+                            "message": "Review started",
+                        },
+                        {
+                            "key": "review",
+                            "type": "approval",
+                            "prompt": "Approve this workflow checkpoint?",
+                        },
+                        {
+                            "key": "complete",
+                            "type": "note",
+                            "message": "Review complete",
+                        },
+                    ]
+                },
+            },
+        )
+        assert definition_response.status_code == 201
+        definition_id = definition_response.json()["id"]
+
+        run_response = client.post(
+            f"/api/v1/workflows/definitions/{definition_id}/runs",
+            json={"input": {"source": "test"}},
+        )
+        assert run_response.status_code == 201
+        run = run_response.json()
+        assert run["status"] == "waiting_approval"
+        assert [step["status"] for step in run["steps"]] == [
+            "succeeded",
+            "waiting_approval",
+            "pending",
+        ]
+        assert len(run["approvals"]) == 1
+        approval_id = run["approvals"][0]["id"]
+
+        pending = client.get("/api/v1/approvals")
+        assert pending.status_code == 200
+        assert any(
+            item["id"] == approval_id and item["status"] == "pending"
+            for item in pending.json()
+        )
+
+        decision = client.post(
+            f"/api/v1/approvals/{approval_id}/decision",
+            json={"decision": "approved", "reason": "Evidence looks correct"},
+        )
+        assert decision.status_code == 200
+        completed = decision.json()
+        assert completed["status"] == "succeeded"
+        assert all(step["status"] == "succeeded" for step in completed["steps"])
+        assert completed["approvals"][0]["status"] == "approved"
+        assert completed["approvals"][0]["reason"] == "Evidence looks correct"
+
+
+def test_rejected_approval_fails_workflow():
+    with TestClient(app) as client:
+        definitions = client.get("/api/v1/workflows/definitions")
+        assert definitions.status_code == 200
+        definition = next(
+            item for item in definitions.json()
+            if item["slug"] == "manual-review-test"
+        )
+
+        run_response = client.post(
+            f"/api/v1/workflows/definitions/{definition['id']}/runs",
+            json={"input": {}},
+        )
+        assert run_response.status_code == 201
+        run = run_response.json()
+        approval_id = run["approvals"][0]["id"]
+
+        rejected = client.post(
+            f"/api/v1/approvals/{approval_id}/decision",
+            json={"decision": "rejected", "reason": "Needs another review"},
+        )
+        assert rejected.status_code == 200
+        assert rejected.json()["status"] == "failed"
+        assert rejected.json()["error"] == "Needs another review"
+        assert rejected.json()["approvals"][0]["status"] == "rejected"
 
 
 def teardown_module():
