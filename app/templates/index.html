@@ -53,12 +53,23 @@
       </section>
 
       <section id="automation" class="view">
-        <div class="empty">
-          <strong>Automation foundation</strong>
-          <h2>Human-approved workflows come next</h2>
-          <p>Planned flow: Trigger → Open profile → Inspect → AI draft → Human approval → Execute → Capture evidence → Audit.</p>
-          <div class="flow"><span>Trigger</span><b>→</b><span>Runtime</span><b>→</b><span>Agent</span><b>→</b><span>Approval</span><b>→</b><span>Audit</span></div>
+        <div class="section-head">
+          <div><h2>Workflows & approvals</h2><p>Durable, evidence-aware workflows pause at explicit human review gates.</p></div>
         </div>
+        <div class="automation-grid">
+          <div class="panel">
+            <div class="panel-title"><strong>Definitions</strong><small>Versioned workflow contracts</small></div>
+            <div id="workflow-definitions"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-title"><strong>Recent runs</strong><small>Execution state and exceptions</small></div>
+            <div id="workflow-runs"></div>
+          </div>
+        </div>
+        <div class="section-head">
+          <div><h2>Needs approval</h2><p>Reviewer decisions are persisted and auditable.</p></div>
+        </div>
+        <div class="panel"><div id="approval-list"></div></div>
       </section>
 
       <section id="audit" class="view">
