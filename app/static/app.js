@@ -14,7 +14,7 @@ function render(){
  const o=state.overview||{profiles:0,active_sessions:0,audit_events:0,screenshots:0};
  $("#metrics").innerHTML=[
   ["Profiles",o.profiles,"persistent workspaces"],
-  ["Active",o.active_sessions+\" / \"+(o.concurrency_limit||\"—\"),"runtime concurrency"],
+  ["Active",o.active_sessions+" / "+(o.concurrency_limit||"—"),"runtime concurrency"],
   ["Screenshots",o.screenshots,"evidence frames"],
   ["Audit events",o.audit_events,"recorded actions"]
  ].map(x=>`<div class="metric"><span>${x[0]}</span><strong>${x[1]}</strong><small>${x[2]}</small></div>`).join("");
