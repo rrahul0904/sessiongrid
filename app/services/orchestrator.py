@@ -45,9 +45,56 @@ class RuntimeOrchestrator:
         return worker
 
     def heartbeat(self, db: Session, worker: RuntimeWorker) -> None:
-        worker.last_heartbeat_at = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
+        worker.last_heartbeat_at = now
         worker.status = "online"
+        leases = db.scalars(
+            select(RuntimeLease).where(
+                RuntimeLease.worker_id == worker.id,
+                RuntimeLease.status == "active",
+            )
+        ).all()
+        for lease in leases:
+            lease.expires_at = now + timedelta(seconds=settings.lease_ttl_seconds)
         db.commit()
+
+    def recover_expired_leases(self, db: Session) -> int:
+        """Fail orphaned sessions whose worker lease has expired.
+
+        The current API process invokes this on startup. A distributed
+        deployment should run the same reconciliation periodically.
+        """
+        now = datetime.now(timezone.utc)
+        expired = db.scalars(
+            select(RuntimeLease).where(
+                RuntimeLease.status == "active",
+                RuntimeLease.expires_at <= now,
+            )
+        ).all()
+        recovered = 0
+        for lease in expired:
+            lease.status = "expired"
+            lease.released_at = now
+            session = db.get(BrowserSession, lease.session_id)
+            if session and session.status in ACTIVE_SESSION_STATES:
+                session.status = "error"
+                session.error = "Runtime lease expired before clean shutdown"
+                task = db.scalar(
+                    select(RuntimeTask)
+                    .where(
+                        RuntimeTask.session_id == session.id,
+                        RuntimeTask.status == "running",
+                    )
+                    .order_by(RuntimeTask.id.desc())
+                )
+                if task:
+                    task.status = "failed"
+                    task.error = "Worker lease expired"
+                    task.updated_at = now
+                recovered += 1
+        if expired:
+            db.commit()
+        return recovered
 
     def active_session_count(self, db: Session, organization_id: int) -> int:
         return int(
