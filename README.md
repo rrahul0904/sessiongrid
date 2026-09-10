@@ -4,10 +4,15 @@ SessionGrid is a policy-aware multi-session social operations control plane for 
 
 > **Scope:** secure isolation, remote workspaces, team access, auditability, human approvals, QA, support, localization, and policy-aware automation. SessionGrid deliberately does not implement fingerprint spoofing, CAPTCHA bypass, ban evasion, mass account creation, engagement manipulation, or stealth automation.
 
-## Current implementation — Phase 1 control-plane wave
+## Current implementation — Phase 2 runtime-orchestration foundation
 
 The repository now contains a runnable browser MVP plus the first multi-tenant control-plane foundation:
 
+- durable runtime task records, worker assignment and leases
+- idempotent session starts via `Idempotency-Key`
+- explicit screenshot evidence capture with SHA-256
+- local ArtifactStore abstraction and tenant-scoped artifact APIs
+- runtime worker/task/lease operator APIs
 - organizations and workspaces
 - users and organization memberships
 - role hierarchy: owner/admin/manager/operator/reviewer/viewer
@@ -26,7 +31,7 @@ The repository now contains a runnable browser MVP plus the first multi-tenant c
 - Docker packaging
 - migration/API tests and CI
 
-This is **not yet the final production platform**. Distributed runtime workers, encrypted remote profile-state storage, WebRTC streaming, durable workflow execution, AI agents and Android workers remain later phases.
+This is **not yet the final production platform**. The lifecycle is now durable, but execution still happens in the API process. A separate authenticated worker service, lease renewal/recovery, encrypted remote profile-state storage, WebRTC streaming, durable workflow execution, AI agents and Android workers remain later phases.
 
 ## Quick start — lightweight SQLite
 
@@ -98,6 +103,11 @@ GET  /api/v1/members
 POST /api/v1/members
 POST /api/v1/api-keys
 GET  /api/v1/usage
+GET  /api/v1/runtime/workers
+GET  /api/v1/runtime/tasks
+GET  /api/v1/runtime/leases
+GET  /api/v1/artifacts
+GET  /api/v1/artifacts/{id}/content
 
 GET  /api/profiles
 POST /api/profiles
@@ -105,6 +115,7 @@ GET  /api/sessions
 POST /api/profiles/{id}/start
 POST /api/profiles/{id}/stop
 GET  /api/profiles/{id}/frame
+POST /api/profiles/{id}/capture
 GET  /api/audit
 ```
 
@@ -133,7 +144,7 @@ Playwright/Chromium    Anbox/Cuttlefish (future)
              WebRTC
 ```
 
-The current browser worker is still in-process. The next runtime wave extracts it into durable worker pools with leases, heartbeats, encrypted state snapshots and recovery.
+The current browser executor is still in-process, but lifecycle intent is persisted as runtime tasks and leases. The next wave extracts execution into an authenticated worker service and adds active lease renewal, stale-worker recovery, encrypted state snapshots and WebRTC.
 
 ## Repository map
 
@@ -149,18 +160,17 @@ docker-compose.yml    PostgreSQL local stack
 
 ## Next engineering wave
 
-1. runtime orchestrator and worker registry
-2. leases, heartbeats and idempotent session transitions
-3. encrypted profile-state snapshots + object-store abstraction
-4. artifact/evidence storage
-5. structured telemetry and cost attribution
-6. WebRTC streaming and control ownership
-7. Temporal workflows and approval service
-8. bounded evidence-aware AI agents
-9. Android runtime provider
-10. enterprise OIDC/SAML/SCIM and private pools
+1. separate authenticated runtime worker service
+2. task claiming, heartbeat renewal and expired-lease recovery
+3. encrypted profile-state snapshots + S3-compatible ArtifactStore
+4. structured telemetry and richer cost attribution
+5. WebRTC streaming and control ownership
+6. Temporal workflows and approval service
+7. bounded evidence-aware AI agents
+8. Android runtime provider
+9. enterprise OIDC/SAML/SCIM and private pools
 
-See `docs/IMPLEMENTATION_PLAN.md`, `docs/ARCHITECTURE.md`, and `docs/SECURITY.md`.
+See `docs/RUNTIME_ORCHESTRATION.md`, `docs/IMPLEMENTATION_PLAN.md`, `docs/ARCHITECTURE.md`, and `docs/SECURITY.md`.
 
 ## License
 
